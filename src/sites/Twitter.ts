@@ -10,6 +10,7 @@ import { URL } from 'url';
 import { DateTime } from 'luxon';
 import { delay } from '../Helpers';
 import CacheManager from '../CacheManager';
+import { TweetV2SingleResult, TwitterApi } from 'twitter-api-v2';
 
 class TwitterVideo extends BaseSite {
     identifier = 'Twitter';
@@ -19,28 +20,34 @@ class TwitterVideo extends BaseSite {
 
     color = 0x1da1f2;
 
-    api: TwitterClient;
+    api: TwitterApi;
 
     constructor() {
         super();
 
-        this.api = new TwitterClient({
-            apiKey: Environment.get('TWITTER_API_KEY') as string,
-            apiSecret: Environment.get('TWITTER_API_SECRET') as string,
-            accessToken: Environment.get('TWITTER_ACCESS_TOKEN') as string,
-            accessTokenSecret: Environment.get(
-                'TWITTER_ACCESS_SECRET'
-            ) as string,
-        });
+        // this.api = new TwitterClient({
+        //     apiKey: Environment.get('TWITTER_API_KEY') as string,
+        //     apiSecret: Environment.get('TWITTER_API_SECRET') as string,
+        //     accessToken: Environment.get('TWITTER_ACCESS_TOKEN') as string,
+        //     accessTokenSecret: Environment.get(
+        //         'TWITTER_ACCESS_SECRET'
+        //     ) as string,
+        // });
+
+        this.api = new TwitterApi(
+            Environment.get('TWITTER_BEARER_TOKEN') as string
+        );
     }
 
     async process(
         match: RegExpMatchArray,
         source: Message | null
     ): Promise<ProcessResponse | false> {
+        const url = match[0];
+
         const tweet = await this.getTweet(match.groups?.id);
 
-        const hasVideo = tweet?.extended_entities?.media.find((item) =>
+        const hasVideo = tweet?.includes?.media.find((item) =>
             ['video', 'animated_gif'].includes(item.type)
         );
 
@@ -64,118 +71,125 @@ class TwitterVideo extends BaseSite {
         // Only try and embed this twitter link if one of the following is true:
         //  - Discord has failed to create an embed for Twitter
         //  - The result is "sensitive" and it has a video, as Discord often fails to play these inline
-        if (hasTwitterEmbed || (hasVideo && !tweet.possibly_sensitive)) {
-            return Promise.resolve(false);
-        }
 
-        return hasVideo
-            ? this.handleVideo(tweet)
-            : this.handleRegular(tweet, match[0]);
+        // if (hasVideo && !tweet.data?.possibly_sensitive) {
+        //     return this.handleVideo(tweet);
+        // }
+
+        // if (hasTwitterEmbed) {
+        //     return Promise.resolve(false);
+        // }
+
+        // return this.handleRegular(tweet, url);
+
+        return Promise.resolve(false);
     }
 
-    async getTweet(id: string): Promise<StatusesShow> {
+    async getTweet(id: string): Promise<TweetV2SingleResult> {
         const cacheKey = `twitter.tweet_${id}`;
         const cacheManager = await CacheManager.getInstance();
 
         const cachedValue = await cacheManager.remember(cacheKey, async () => {
-            const results = await this.api.tweets.statusesShow({
-                id: id,
-                include_entities: true,
-                trim_user: false,
-                tweet_mode: 'extended',
+            const results = await this.api.readOnly.v2.singleTweet(id, {
+                expansions: ['attachments.media_keys'],
+                'media.fields': ['media_key'],
+                'user.fields': ['username', 'profile_image_url'],
+                'tweet.fields': ['id', 'text', 'attachments', 'created_at', 'entities', 'possibly_sensitive'],
             });
+
+            console.debug(results, results.data.attachments, results.data.entities, results.includes.media);
 
             return Promise.resolve(JSON.stringify(results));
         });
 
-        const results = JSON.parse(cachedValue) as StatusesShow;
+        const results = JSON.parse(cachedValue) as TweetV2SingleResult;
 
         return Promise.resolve(results);
     }
 
-    async handleVideo(status: StatusesShow): Promise<ProcessResponse | false> {
-        const video = status?.extended_entities?.media.find((item) =>
-            ['video', 'animated_gif'].includes(item.type)
-        );
+    // async handleVideo(status: TweetV2SingleResult): Promise<ProcessResponse | false> {
+    //     const video = status?.includes?.media.find((item) =>
+    //         ['video', 'animated_gif'].includes(item.type)
+    //     );
 
-        if (!video) {
-            return Promise.resolve(false);
-        }
+    //     if (!video) {
+    //         return Promise.resolve(false);
+    //     }
 
-        const variants = video.video_info.variants
-            .filter((item) => item?.bitrate !== undefined)
-            .sort((a, b) => b.bitrate - a.bitrate)
-            .map((item) => item.url);
+    //     const variants = video.video_info.variants
+    //         .filter((item) => item?.bitrate !== undefined)
+    //         .sort((a, b) => b.bitrate - a.bitrate)
+    //         .map((item) => item.url);
 
-        const variant = await this.determineHighestQuality(variants);
+    //     const variant = await this.determineHighestQuality(variants);
 
-        if (!variant) {
-            return Promise.resolve(false);
-        }
+    //     if (!variant) {
+    //         return Promise.resolve(false);
+    //     }
 
-        const videoFile = await this.getFile(variant);
+    //     const videoFile = await this.getFile(variant);
 
-        const message: ProcessResponse = {
-            embeds: [],
-            files: [videoFile],
-        };
+    //     const message: ProcessResponse = {
+    //         embeds: [],
+    //         files: [videoFile],
+    //     };
 
-        return Promise.resolve(message);
-    }
+    //     return Promise.resolve(message);
+    // }
 
-    async handleRegular(
-        status: StatusesShow,
-        url: string
-    ): Promise<ProcessResponse | false> {
-        const message: ProcessResponse = {
-            embeds: [],
-            files: [],
-        };
+    // async handleRegular(
+    //     status: TweetV2SingleResult,
+    //     url: string
+    // ): Promise<ProcessResponse | false> {
+    //     const message: ProcessResponse = {
+    //         embeds: [],
+    //         files: [],
+    //     };
 
-        const photo = status?.extended_entities?.media.find((item) =>
-            ['photo'].includes(item.type)
-        );
+    //     const photo = status?.extended_entities?.media.find((item) =>
+    //         ['photo'].includes(item.type)
+    //     );
 
-        const time = DateTime.fromFormat(
-            status.created_at,
-            'ccc LLL d HH:mm:ss ZZZ y'
-        );
+    //     const time = DateTime.fromFormat(
+    //         status.created_at,
+    //         'ccc LLL d HH:mm:ss ZZZ y'
+    //     );
 
-        const embed = new MessageEmbed({
-            url: url,
-            timestamp: time.toUTC().toMillis(),
-            color: this.color,
-            description: status.full_text,
-            author: {
-                name: `${status.user.name} (@${status.user.screen_name})`,
-                iconURL: status.user.profile_image_url_https,
-                url: `https://twitter.com/${status.user.screen_name}`,
-            },
-            fields: [
-                {
-                    name: 'Likes',
-                    value: status.favorite_count.toString(),
-                    inline: true,
-                },
-                {
-                    name: 'Retweets',
-                    value: status.retweet_count.toString(),
-                    inline: true,
-                },
-            ],
-            image: {
-                url: photo?.media_url_https ?? '',
-            },
-            footer: {
-                iconURL: TWITTER_ICON_URL,
-                text: 'Twitter',
-            },
-        });
+    //     const embed = new MessageEmbed({
+    //         url: url,
+    //         timestamp: time.toUTC().toMillis(),
+    //         color: this.color,
+    //         description: status.full_text,
+    //         author: {
+    //             name: `${status.user.name} (@${status.user.screen_name})`,
+    //             iconURL: status.user.profile_image_url_https,
+    //             url: `https://twitter.com/${status.user.screen_name}`,
+    //         },
+    //         fields: [
+    //             {
+    //                 name: 'Likes',
+    //                 value: status.favorite_count.toString(),
+    //                 inline: true,
+    //             },
+    //             {
+    //                 name: 'Retweets',
+    //                 value: status.retweet_count.toString(),
+    //                 inline: true,
+    //             },
+    //         ],
+    //         image: {
+    //             url: photo?.media_url_https ?? '',
+    //         },
+    //         footer: {
+    //             iconURL: TWITTER_ICON_URL,
+    //             text: 'Twitter',
+    //         },
+    //     });
 
-        message.embeds.push(embed);
+    //     message.embeds.push(embed);
 
-        return Promise.resolve(message);
-    }
+    //     return Promise.resolve(message);
+    // }
 
     /**
      * Determines the highest quality of a video that can be posted to Discord inside of its size limit
